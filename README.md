@@ -1,236 +1,138 @@
-# Laboratorio: Comunicación entre Microservicios
+# Laboratorio 14: Config Server y Resiliencia
 
-**Alumno:** Alexander Faustino
-**Docente:** Ricardo Coello Palomino
-
----
 
 ## Objetivo
 
-Implementar la comunicación entre microservicios utilizando **OpenFeign** y **Eureka Server**, permitiendo que el microservicio `pedido-service` consulte información de `cliente-service` y `producto-service`.
-
----
-
-## Arquitectura
-
-El proyecto está compuesto por cinco módulos Maven independientes:
-
-| Servicio | Puerto | Base de datos | Descripción |
-|---|---|---|---|
-| `eureka-server` | 8761 | — | Servidor de registro de servicios |
-| `categoria-service` | 8082 | `bd_categoria_dev` | Gestión de categorías |
-| `producto-service` | 8083 | `bd_producto_dev` | Gestión de productos (consulta categoría con Feign) |
-| `cliente-service` | 8081 | `bd_cliente_dev` | Gestión de clientes |
-| `pedido-service` | 8084 | `bd_pedido_dev` | Gestión de pedidos (consulta cliente y producto con Feign) |
-
-
----
+Implementar configuración centralizada con **Spring Cloud Config Server** y tolerancia a fallos con **Resilience4j** (Circuit Breaker, Retry y Bulkhead) en una arquitectura de microservicios.
 
 ## Tecnologías
 
 - Java 21
 - Spring Boot 3.5.3
-- Spring Cloud 2025.0.0 (Eureka Server, Eureka Client, OpenFeign)
-- Spring Data JPA
-- MySQL 8
-- Lombok
-- Maven
-- Postman (pruebas)
+- Spring Cloud 2025.0.0
+- Spring Cloud Config (Server y Client)
+- Spring Cloud Netflix Eureka
+- Spring Cloud OpenFeign
+- Resilience4j (Circuit Breaker, Retry, Bulkhead) con Actuator y AOP
+- Spring Data JPA y MySQL
+- Lombok y Maven
 
----
+## Arquitectura
 
-## Estructura del proyecto
+| Módulo | Puerto (dev) | Puerto (prod) | Función |
+|---|---|---|---|
+| `eureka-server` | 8761 | - | Registro de servicios |
+| `config-server` | 8888 | - | Configuración centralizada |
+| `cliente-service` | 8081 | 9091 | Gestiona clientes |
+| `categoria-service` | 8082 | 9092 | Gestiona categorías |
+| `producto-service` | 8083 | 9093 | Gestiona productos (consume categoria-service) |
+| `pedido-service` | 8084 | 9094 | Gestiona pedidos (consume cliente-service y producto-service) |
 
 ```
-microservicios/
-├── eureka-server/
-├── categoria-service/
-├── cliente-service/
-├── producto-service/
-└── pedido-service/
+pedido-service ──► cliente-service
+       │
+       └────────► producto-service ──► categoria-service
+
+Todos los servicios leen su configuración desde config-server,
+que a su vez lee el repositorio config-repo en GitHub.
 ```
 
----
+## Repositorio de configuración
 
-## Requisitos previos
+La configuración vive en un repositorio aparte:
+https://github.com/AlexanderFtn06/config-repo
 
-- JDK 21
-- IntelliJ IDEA
-- MySQL corriendo en `localhost:3306` con usuario `root` (sin contraseña)
-- Postman
+Por cada servicio hay tres archivos:
 
-Crear las bases de datos:
+- `<servicio>.yml`: propiedades comunes (nombre, JPA, mensaje).
+- `<servicio>-dev.yml`: puerto y base de datos de desarrollo.
+- `<servicio>-prod.yml`: puerto y base de datos de producción.
 
-```sql
-CREATE DATABASE bd_categoria_dev;
-CREATE DATABASE bd_producto_dev;
-CREATE DATABASE bd_cliente_dev;
-CREATE DATABASE bd_pedido_dev;
+El perfil activo de cada servicio es `dev`, definido en su `application.yml` junto con:
+
+```yaml
+spring:
+  config:
+    import: optional:configserver:http://localhost:8888
 ```
 
----
+## Patrones de resiliencia
 
-## Ejecución
-
-Ejecutar en este orden:
-
-1. `EurekaServerApplication` (puerto 8761)
-2. `CategoriaServiceApplication` (puerto 8082)
-3. `ClienteServiceApplication` (puerto 8081)
-4. `ProductoServiceApplication` (puerto 8083)
-5. `PedidoServiceApplication` (puerto 8084)
-
-Verificar que los cuatro servicios aparezcan en estado **UP** en http://localhost:8761.
-
----
-
-## Endpoints
-
-### categoria-service (8082)
-
-| Método | Ruta | Descripción |
+| Servicio consumidor | Servicio consumido | Patrones |
 |---|---|---|
-| GET | `/api/categorias` | Listar categorías |
-| GET | `/api/categorias/{id}` | Obtener categoría por id |
-| POST | `/api/categorias` | Registrar categoría |
+| `producto-service` | `categoria-service` | Circuit Breaker, Retry y Bulkhead |
+| `pedido-service` | `cliente-service` | Circuit Breaker y Retry (con timeout de Feign de 3 s) |
+| `pedido-service` | `producto-service` | Circuit Breaker y Bulkhead |
 
-### cliente-service (8081)
+Cada consumidor tiene una clase `*CircuitService` (`CategoriaCircuitService`, `ClienteCircuitService`, `ProductoCircuitService`) con las anotaciones de Resilience4j y un método **fallback** que devuelve datos temporales cuando el servicio consumido no responde.
 
-| Método | Ruta | Descripción |
+Configuración principal de `pedido-service`:
+
+```yaml
+resilience4j:
+  circuitbreaker:
+    instances:
+      clienteService / productoService:
+        slidingWindowSize: 5
+        minimumNumberOfCalls: 3
+        failureRateThreshold: 50
+        waitDurationInOpenState: 10s
+  retry:
+    instances:
+      clienteRetry:
+        maxAttempts: 3
+        waitDuration: 2s
+  bulkhead:
+    instances:
+      productoBulkhead:
+        maxConcurrentCalls: 2
+        maxWaitDuration: 1s
+```
+
+## Cómo ejecutar
+
+Requisitos: JDK 17 o superior, Maven y MySQL en el puerto 3306 con las bases `bd_categoria_dev`, `bd_producto_dev`, `bd_cliente_dev` y `bd_pedido_dev`.
+
+Iniciar en este orden y esperar a que cada uno termine de arrancar:
+
+1. `config-server`
+2. `eureka-server`
+3. `categoria-service`
+4. `cliente-service`
+5. `producto-service`
+6. `pedido-service`
+
+## Pruebas
+
+**Config Server**
+
+- http://localhost:8888/categoria-service/default
+- http://localhost:8888/producto-service/dev
+- http://localhost:8888/cliente-service/prod
+
+**Circuit Breaker**
+
+1. Con todo activo: http://localhost:8083/api/productos devuelve la categoría real.
+2. Detener `categoria-service`: la respuesta trae `"Categoría temporal no disponible"` y la consola muestra `Circuit Breaker activado`.
+3. En `pedido-service`, `GET /api/pedidos/1` devuelve cliente y producto temporales al detener `cliente-service` o `producto-service`.
+
+**Retry**
+
+- Con el servicio consumido caído o lento (por encima del timeout), la consola repite `Llamando a ...` según `maxAttempts` y termina con `Fallback ejecutado`.
+
+**Bulkhead**
+
+- Con el servicio consumido lento (`Thread.sleep` de 10 s) y varias pestañas abiertas a la vez, solo 2 llamadas entran; las demás reciben el fallback con el mensaje `Bulkhead ... is full and does not permit further calls`.
+
+## Retry vs Bulkhead
+
+| | Retry | Bulkhead |
 |---|---|---|
-| GET | `/api/clientes` | Listar clientes |
-| GET | `/api/clientes/{id}` | Obtener cliente por id |
-| POST | `/api/clientes` | Registrar cliente |
-| PUT | `/api/clientes/{id}` | Actualizar cliente |
-| DELETE | `/api/clientes/{id}` | Eliminar cliente |
+| Qué hace | Reintenta una llamada que falló | Limita las llamadas concurrentes a un servicio |
+| Cuándo usarlo | Fallos pasajeros (red, timeouts breves) | Servicios lentos que podrían agotar los hilos del consumidor |
+| Riesgo | Añade carga y demora si el servicio sigue caído | Rechaza peticiones si el límite es muy bajo |
 
-### producto-service (8083)
+## Notas
 
-| Método | Ruta | Descripción |
-|---|---|---|
-| GET | `/api/productos` | Listar productos |
-| GET | `/api/productos/{id}` | Obtener producto con su categoría |
-| POST | `/api/productos` | Registrar producto |
-| DELETE | `/api/productos/{id}` | Eliminar producto |
-
-### pedido-service (8084)
-
-| Método | Ruta | Descripción |
-|---|---|---|
-| GET | `/api/pedidos` | Listar pedidos |
-| GET | `/api/pedidos/{id}` | Obtener pedido con cliente y producto |
-| POST | `/api/pedidos` | Registrar pedido |
-| PUT | `/api/pedidos/{id}` | Actualizar pedido |
-| PUT | `/api/pedidos/{id}/anular` | Anular pedido (no se elimina) |
-
----
-
-## Ejemplos de uso
-
-**Registrar categoría**
-
-```http
-POST http://localhost:8082/api/categorias
-Content-Type: application/json
-
-{
-  "nombre": "Tecnología",
-  "estado": "ACTIVO"
-}
-```
-
-**Registrar cliente**
-
-```http
-POST http://localhost:8081/api/clientes
-Content-Type: application/json
-
-{
-  "nombre": "Alexander",
-  "apellidos": "Faustino",
-  "direccion": "Av. Javier Prado 123",
-  "estado": "ACTIVO",
-  "nroDni": "60803133"
-}
-```
-
-**Registrar producto**
-
-```http
-POST http://localhost:8083/api/productos
-Content-Type: application/json
-
-{
-  "nombre": "Laptop",
-  "precio": 2500,
-  "stock": 10,
-  "categoriaId": 1
-}
-```
-
-**Registrar pedido**
-
-```http
-POST http://localhost:8084/api/pedidos
-Content-Type: application/json
-
-{
-  "clienteId": 6,
-  "productoId": 4,
-  "cantidad": 2
-}
-```
-
-**Consultar pedido (comunicación entre servicios)**
-
-```http
-GET http://localhost:8084/api/pedidos/1
-```
-
-Respuesta:
-
-```json
-{
-  "id": 1,
-  "cantidad": 2,
-  "cliente": {
-    "id": 6,
-    "nombre": "Alexander",
-    "apellido": "Faustino"
-  },
-  "producto": {
-    "id": 4,
-    "nombre": "Pc gamer",
-    "precio": 5500.0
-  }
-}
-```
-
----
-
-## Validaciones
-
-| Entidad | Reglas |
-|---|---|
-| Pedido | `clienteId` obligatorio, `productoId` obligatorio, `cantidad` mayor a cero |
-| Cliente | `nombre`, `apellidos`, `direccion`, `estado` y `nroDni` obligatorios; `nroDni` de 8 dígitos exactos |
-| Producto | `nombre` obligatorio, `precio` mayor a cero |
-
----
-
-## Consideraciones
-
-- No se usan relaciones JPA entre microservicios.
-- Cada servicio tiene su propia base de datos.
-- No se realizan consultas directas a bases de datos de otros servicios.
-- La comunicación se realiza exclusivamente mediante APIs REST y OpenFeign.
-
----
-
-## Conclusiones
-
-1. Eureka permite localizar los servicios por nombre, sin depender de IPs o puertos fijos.
-2. OpenFeign reduce el código necesario para llamar a otros servicios REST.
-3. Guardar solo identificadores en `pedido-service` evita duplicar datos de clientes y productos.
-4. La validación en la entrada evita registrar datos inválidos y devuelve errores claros.
-5. Cada microservicio con su propia base de datos permite desplegarlos y mantenerlos de forma independiente.
+- Si el `@CircuitBreaker` tiene `fallbackMethod`, atrapa el error antes que el `@Retry` y este no reintenta. Por eso en `ClienteCircuitService` el Circuit Breaker no define fallback.
+- Los `Thread.sleep` usados para simular lentitud se retiraron del código entregado.

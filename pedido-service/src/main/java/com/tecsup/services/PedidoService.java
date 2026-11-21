@@ -1,7 +1,6 @@
 package com.tecsup.services;
 
-import com.tecsup.client.ClienteClient;
-import com.tecsup.client.ProductoClient;
+
 import com.tecsup.dto.ClienteDTO;
 import com.tecsup.dto.PedidoDTO;
 import com.tecsup.dto.PedidoDetalleDTO;
@@ -19,8 +18,8 @@ import java.util.List;
 public class PedidoService {
 
     private final PedidoRepository repo;
-    private final ClienteClient clienteClient;
-    private final ProductoClient productoClient;
+    private final ClienteCircuitService clienteCircuitService;
+    private final ProductoCircuitService productoCircuitService;
 
     public List<Pedido> listar() {
         return repo.findAll();
@@ -34,8 +33,8 @@ public class PedidoService {
     public PedidoDetalleDTO obtenerDetalle(Long id) {
         Pedido pedido = obtener(id);
 
-        ClienteDTO cliente = clienteClient.obtenerCliente(pedido.getClienteId());
-        ProductoDTO producto = productoClient.obtenerProducto(pedido.getProductoId());
+        ClienteDTO cliente = clienteCircuitService.obtenerCliente(pedido.getClienteId());
+        ProductoDTO producto = productoCircuitService.obtenerProducto(pedido.getProductoId());
 
         PedidoDetalleDTO detalle = new PedidoDetalleDTO();
         detalle.setId(pedido.getId());

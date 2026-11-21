@@ -1,6 +1,5 @@
 package com.tecsup.services;
 
-import com.tecsup.client.CategoriaClient;
 import com.tecsup.dto.CategoriaDTO;
 import com.tecsup.exception.ResourceNotFoundException;
 import com.tecsup.model.Producto;
@@ -17,15 +16,22 @@ public class ProductoService {
     private ProductoRepository repo;
 
     @Autowired
-    private CategoriaClient categoriaClient;
+    private CategoriaCircuitService categoriaCircuitService;
 
     public List<Producto> listar() {
-        return repo.findAll();
+        List<Producto> productos = repo.findAll();
+        productos.forEach(p -> {
+            CategoriaDTO categoria =
+                    categoriaCircuitService.obtenerCategoria(p.getCategoriaId());
+            p.setCategoria(categoria);
+        });
+        return productos;
     }
 
     public Producto guardar(Producto p) {
         Producto producto = repo.save(p);
-        CategoriaDTO categoria = categoriaClient.obtenerCategoria(producto.getCategoriaId());
+        CategoriaDTO categoria =
+                categoriaCircuitService.obtenerCategoria(producto.getCategoriaId());
         producto.setCategoria(categoria);
         return producto;
     }
@@ -33,7 +39,8 @@ public class ProductoService {
     public Producto obtener(Long id) {
         Producto producto = repo.findById(id).orElseThrow(
                 () -> new ResourceNotFoundException("Producto no encontrado con id: " + id));
-        CategoriaDTO categoria = categoriaClient.obtenerCategoria(producto.getCategoriaId());
+        CategoriaDTO categoria =
+                categoriaCircuitService.obtenerCategoria(producto.getCategoriaId());
         producto.setCategoria(categoria);
         return producto;
     }

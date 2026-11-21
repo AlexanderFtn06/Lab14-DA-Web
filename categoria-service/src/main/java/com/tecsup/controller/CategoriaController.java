@@ -31,7 +31,7 @@ public class CategoriaController {
     }
 
     @GetMapping("/{id}")
-    public ResponseEntity<?> obtener(@PathVariable Long id) {
+    public ResponseEntity<?> obtener(@PathVariable Long id) throws InterruptedException {
         return ResponseEntity.ok(service.obtener(id));
     }
 
